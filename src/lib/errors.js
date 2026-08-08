@@ -1,5 +1,6 @@
 /* Cap violations are raised by database triggers, so the UI reads them from
-   the error rather than pre-checking counts client-side. */
+   the error rather than pre-checking counts client-side. OWNER_NOT_ON_PROJECT
+   isn't a plan cap, but it's raised the same way, so it lives here too. */
 export const CAP_CODES = [
   "PROJECT_LIMIT_REACHED",
   "SEAT_LIMIT_REACHED",
@@ -8,6 +9,7 @@ export const CAP_CODES = [
   "LAST_ADMIN",
   "CSV_EXPORT_REQUIRES_PAID",
   "ALREADY_IN_WORKSPACE",
+  "OWNER_NOT_ON_PROJECT",
 ];
 
 export function capCode(error) {
@@ -24,6 +26,7 @@ const FRIENDLY = {
   LAST_ADMIN: "A workspace needs at least one admin. Promote someone else first.",
   CSV_EXPORT_REQUIRES_PAID: "CSV export comes with the Paid plan.",
   ALREADY_IN_WORKSPACE: "You already belong to a workspace.",
+  OWNER_NOT_ON_PROJECT: "That person isn't on this project, so they can't be the owner.",
 };
 
 export function friendly(error, fallback = "Something went wrong. Try again.") {
