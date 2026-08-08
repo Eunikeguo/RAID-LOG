@@ -826,6 +826,19 @@ export default function RaidLogApp() {
 
   const handleSnooze = (item) => run(() => api.snoozeItem(item.rowId, SNOOZE_DAYS), `Snoozed ${SNOOZE_DAYS} days.`);
 
+  /* Server-side send via the send-invite-email Edge Function. If it's
+     not set up yet (or Resend hiccups), fall back to the person's own
+     mail client rather than leaving them stuck. */
+  async function handleSendInviteEmail(email) {
+    try {
+      await api.sendInviteEmail(email, ws.name, me.name);
+      flash(`Invite email sent to ${email}.`);
+    } catch (e) {
+      flash("Couldn't send that automatically — opening your mail app instead.");
+      sendInvite(email);
+    }
+  }
+
   async function handleDelete(item) {
     setConfirm(null); setOpen(null);
     await run(() => api.deleteItem(item.rowId), `${item.id} deleted.`);
@@ -957,6 +970,7 @@ export default function RaidLogApp() {
             hasExpansion={ws.has_expansion_addon} workspaceName={ws.name}
             projectCount={data.projects.length}
             onInvite={(email, name) => run(() => api.inviteMember(ws.id, email, name))}
+            onSendInviteEmail={handleSendInviteEmail}
             onSetRole={(id, role) => run(() => api.setWorkspaceRole(id, role))}
             onRemove={(id) => run(() => api.removeMember(id))}
             onUpgrade={() => setView("billing")} />
@@ -2328,11 +2342,13 @@ function ProjectsView({ projects, items, members, projectMembers, limits, plan, 
 }
 
 /* ══ TEAM ═════════════════════════════════════════════ */
-function TeamView({ members, items, myEmail, projectMembers, limits, plan, hasExpansion, workspaceName, projectCount = 0, onInvite, onSetRole, onRemove, onUpgrade }) {
+function TeamView({ members, items, myEmail, projectMembers, limits, plan, hasExpansion, workspaceName, projectCount = 0, onInvite, onSendInviteEmail, onSetRole, onRemove, onUpgrade }) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [guard, setGuard] = useState("");
+  const [sendingTo, setSendingTo] = useState(null);
+  const [copied, setCopied] = useState(false);
   const used = members.length;
   const seatsLeft = limits.seats - used;
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -2347,9 +2363,23 @@ function TeamView({ members, items, myEmail, projectMembers, limits, plan, hasEx
     if (seatsLeft <= 0) { setLimitModal({ attempted: e }); return; }
     try {
       await onInvite(e, name);
-      sendInvite(e);
       setEmail(""); setName(""); setError("");
-    } catch { /* toast already shown */ }
+      setSendingTo(e);
+      await onSendInviteEmail(e);
+      setSendingTo(null);
+    } catch { setSendingTo(null); /* toast already shown */ }
+  }
+
+  async function resend(m) {
+    setSendingTo(m.email);
+    await onSendInviteEmail(m.email);
+    setSendingTo(null);
+  }
+
+  function copyLink() {
+    navigator.clipboard?.writeText(APP_URL);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   /* The database enforces the last-admin rule too; these checks just
@@ -2382,9 +2412,12 @@ function TeamView({ members, items, myEmail, projectMembers, limits, plan, hasEx
                 className="w-full px-2.5 py-2 text-[13px]" style={inputStyle} />
             </Field>
             {error && <div className="text-[12px]" style={{ color: C.late }}>{error}</div>}
-            <button onClick={invite} className="flex items-center justify-center gap-1.5 py-2 rounded-md text-[13px] font-medium"
-              style={{ background: C.accent, color: "#fff" }}>
-              <Send size={14} /> Send invite
+            <button onClick={invite} disabled={sendingTo !== null} className="flex items-center justify-center gap-1.5 py-2 rounded-md text-[13px] font-medium"
+              style={{ background: C.accent, color: "#fff", opacity: sendingTo !== null ? 0.7 : 1 }}>
+              <Send size={14} /> {sendingTo ? "Sending…" : "Send invite"}
+            </button>
+            <button onClick={copyLink} className="flex items-center justify-center gap-1.5 py-1.5 text-[12px]" style={{ color: C.accent }}>
+              {copied ? <CheckCircle2 size={13} /> : <Link2 size={13} />} {copied ? "Link copied" : "Copy invite link instead"}
             </button>
             {seatsLeft <= 0 && (
               <div className="text-[11px] leading-relaxed" style={{ color: C.soon }}>
@@ -2440,8 +2473,10 @@ function TeamView({ members, items, myEmail, projectMembers, limits, plan, hasEx
                   {m.role === "admin" ? "all projects" : `${onProjects} project${onProjects === 1 ? "" : "s"}`} · {held} live
                 </span>
                 {m.state === "invited" && (
-                  <button onClick={() => sendInvite(m.email)} className="text-[11px] px-2 py-1 rounded shrink-0"
-                    style={{ fontFamily: MONO, background: "#FBF4E6", color: C.soon }}>Resend</button>
+                  <button onClick={() => resend(m)} disabled={sendingTo === m.email} className="text-[11px] px-2 py-1 rounded shrink-0"
+                    style={{ fontFamily: MONO, background: "#FBF4E6", color: C.soon, opacity: sendingTo === m.email ? 0.6 : 1 }}>
+                    {sendingTo === m.email ? "Sending…" : "Resend"}
+                  </button>
                 )}
                 <select value={m.role} onChange={(e) => changeRole(m, e.target.value)}
                   className="h-8 px-2 rounded-md text-[12px] shrink-0" style={inputStyle}>
