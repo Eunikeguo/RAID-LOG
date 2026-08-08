@@ -393,6 +393,174 @@ function Toast({ toast, onUndo, onDismiss }) {
   );
 }
 
+/* relative time, e.g. "3h ago" — notifications only need coarse granularity */
+function timeAgo(iso) {
+  if (!iso) return "";
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+/* ── notifications dropdown (anchored under the bell) ────── */
+function NotificationPanel({ notes, items, projectName, onOpenItem, onMarkRead, onClose }) {
+  const box = useRef(null);
+
+  useEffect(() => {
+    const away = (e) => { if (box.current && !box.current.contains(e.target)) onClose(); };
+    document.addEventListener("mousedown", away);
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+
+  const sorted = [...notes].sort((a, b) => new Date(b.at) - new Date(a.at));
+  const unreadIds = notes.filter((n) => !n.read).map((n) => n.id);
+
+  function openNote(n) {
+    if (!n.read) onMarkRead([n.id]);
+    if (n.itemId) onOpenItem(n.itemId);
+    else onClose();
+  }
+
+  return (
+    <div ref={box} className="absolute right-0 top-full mt-2 w-[320px] max-w-[85vw] rounded-lg overflow-hidden z-30"
+      style={{ background: C.surface, border: `1px solid ${C.rule}`, boxShadow: "0 10px 28px rgba(22,32,43,.16)" }}>
+      <div className="px-3.5 py-2.5 flex items-center justify-between gap-2" style={{ borderBottom: `1px solid ${C.rule}` }}>
+        <span className="text-[11px] tracking-[0.1em] uppercase" style={{ fontFamily: MONO, color: C.muted }}>Notifications</span>
+        {unreadIds.length > 0 && (
+          <button onClick={() => onMarkRead(unreadIds)} className="text-[11px]" style={{ color: C.accent }}>Mark all read</button>
+        )}
+      </div>
+      <div className="max-h-[360px] overflow-y-auto">
+        {sorted.length === 0 && (
+          <div className="px-3.5 py-6 text-[12.5px] text-center" style={{ color: C.muted }}>You're all caught up.</div>
+        )}
+        {sorted.map((n) => {
+          const related = items.find((it) => it.id === n.itemId);
+          const proj = related ? projectName(related.projectId) : null;
+          const Icon = n.type === "mention" ? AtSign : UserCheck;
+          const verb = n.type === "mention" ? "mentioned you on" : "assigned you";
+          return (
+            <button key={n.id} onClick={() => openNote(n)}
+              className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5"
+              style={{ borderTop: `1px solid ${C.rule}`, background: n.read ? "transparent" : "#F4F7F9" }}>
+              <Icon size={13} className="shrink-0 mt-0.5" color={n.read ? C.muted : C.accent} />
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] leading-snug">
+                  <span className="font-medium">{n.actor}</span> {verb}{n.itemId ? ` ${n.itemId}` : ""}
+                  {proj ? <span style={{ color: C.muted }}> · {proj}</span> : null}
+                </div>
+                {n.snippet && (
+                  <div className="text-[11.5px] mt-0.5 truncate" style={{ color: C.muted }}>“{n.snippet}”</div>
+                )}
+                <div className="text-[10.5px] mt-1" style={{ fontFamily: MONO, color: C.muted }}>{timeAgo(n.at)}</div>
+              </div>
+              {!n.read && <span className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: C.accent }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── plan-limit request modal — mirrors UpgradeNotice's want/ceiling logic,
+   but as an interstitial when a create action is actually blocked (§3.5) ── */
+function LimitRequestModal({ kind, attempted, workspaceName, plan, hasExpansion, limits, projectCount, seatCount, onClose }) {
+  const want = upgradePath(plan, hasExpansion);
+  const ceiling = want === "ceiling";
+  const tint = ceiling ? C.soon : C.accent;
+  const cta = ceiling
+    ? { label: "Talk to us about more room", icon: Mail }
+    : want === "expansion"
+      ? { label: `Add Expansion — ${EXPANSION.price}`, url: STRIPE.expansion, icon: ExternalLink }
+      : { label: `Upgrade to Paid — ${PLAN_BASE.paid.price}`, url: STRIPE.paid, icon: ExternalLink };
+  const Icon = cta.icon;
+  const kindLabel = kind === "projects" ? "project" : "seat";
+  const cap = kind === "projects" ? limits.projects : limits.seats;
+  const used = kind === "projects" ? projectCount : seatCount;
+  const salesContext = { workspaceName, plan, hasExpansion, projects: projectCount, seats: seatCount, limits };
+  const hitting = kind === "projects" ? "projects" : "seats";
+
+  return (
+    <div className="fixed inset-0 z-[55] flex items-center justify-center px-4" style={{ background: "rgba(22,32,43,.45)" }}>
+      <div className="w-full max-w-[400px] rounded-lg p-5" style={{ background: C.surface }}>
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div className="text-[14px] font-semibold">
+            {kind === "projects" ? "Project limit reached" : "Seat limit reached"}
+          </div>
+          <button onClick={onClose} aria-label="Close"><X size={15} color={C.muted} /></button>
+        </div>
+        <div className="text-[13px] leading-relaxed mb-3" style={{ color: C.muted }}>
+          {kind === "projects"
+            ? <>Adding <span style={{ color: C.ink }}>“{attempted}”</span> would put {workspaceName} over its {cap}-project limit on {limits.label}.</>
+            : <>Inviting <span style={{ color: C.ink }}>{attempted}</span> would put {workspaceName} over its {cap}-seat limit on {limits.label}.</>}
+        </div>
+        <div className="text-[11px] mb-4" style={{ fontFamily: MONO, color: C.muted }}>
+          {used} of {cap} {kindLabel}s used
+        </div>
+
+        <button
+          onClick={() => (ceiling ? contactSales({ ...salesContext, hitting }) : openStripe(cta.url))}
+          className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-[13px] font-medium mb-2"
+          style={{ background: tint, color: "#fff" }}>
+          <Icon size={13} /> {cta.label}
+        </button>
+        <button onClick={onClose} className="w-full text-[12.5px] py-1.5" style={{ color: C.muted }}>Maybe later</button>
+        <div className="text-[11px] mt-2 text-center" style={{ color: C.muted }}>
+          {ceiling
+            ? `Opens an email to ${SALES_EMAIL} with your usage filled in.`
+            : "Payment opens in Stripe. Your limits lift once it's confirmed."}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── first-run checklist for a workspace admin — same three
+   conditions the parent uses to decide whether to show it at all ── */
+function Onboarding({ ws, onGo }) {
+  const steps = [
+    { done: ws.projects.length > 0, label: "Create your first project", detail: "Projects group the risks, actions, issues, dependencies and decisions you're tracking.", go: "projects", icon: FolderPlus },
+    { done: ws.members.length >= 2, label: "Invite your team", detail: "Bring in the people who'll own items and get reminders.", go: "team", icon: Users },
+    { done: ws.items.length > 0, label: "Log your first item", detail: "Add a risk, action, issue, dependency or decision to the log.", go: "log", icon: ClipboardList },
+  ];
+  const doneCount = steps.filter((s) => s.done).length;
+
+  return (
+    <Card title="Get set up" subtitle={`${doneCount} of ${steps.length} done`}>
+      {steps.map((s, idx) => {
+        const StepIcon = s.icon;
+        return (
+          <div key={s.label} className="flex items-center gap-3 px-4 py-3"
+            style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.rule}` }}>
+            {s.done
+              ? <CheckCircle2 size={16} color={C.good} className="shrink-0" />
+              : <StepIcon size={16} color={C.muted} className="shrink-0" />}
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-medium" style={{ color: s.done ? C.muted : C.ink, textDecoration: s.done ? "line-through" : "none" }}>
+                {s.label}
+              </div>
+              <div className="text-[11.5px]" style={{ color: C.muted }}>{s.detail}</div>
+            </div>
+            {!s.done && (
+              <button onClick={() => onGo(s.go)} className="text-[12px] px-2.5 py-1.5 rounded-md font-medium shrink-0"
+                style={{ background: C.accent, color: "#fff" }}>
+                Go
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
 /* ── project health ───────────────────────────────────── */
 function healthOf(items) {
   const live = items.filter((i) => isLive(i.status));
@@ -2480,3 +2648,4 @@ function BillingView({ ws, limits, projectCount, seatCount }) {
     </div>
   );
 }
+
