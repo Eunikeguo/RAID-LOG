@@ -348,41 +348,23 @@ function UpgradeNotice({ message, want, isWsAdmin, onDismiss, onSeeBilling, sale
 }
 
 /* owner typeahead — matters once a workspace has 20 seats */
-function OwnerPicker({ value, members, onChange, error }) {
-  const [query, setQuery] = useState("");
-  const [openList, setOpenList] = useState(false);
-  const box = useRef(null);
-
-  useEffect(() => {
-    const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpenList(false); };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, []);
-
-  const hits = members.filter((m) => m.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 6);
-
+/* a real <select> restricted to a given project's assignees — unlike a
+   typeahead, this can never submit a value outside the rendered options,
+   which is the point when the list is scoped to one project's team */
+function AssigneeSelect({ value, options, onChange, error, disabled }) {
+  const known = options.some((o) => o.name === value);
   return (
-    <div ref={box} className="relative">
-      <input
-        value={openList ? query : value || ""}
-        placeholder="Type a name"
-        onFocus={() => { setQuery(""); setOpenList(true); }}
-        onChange={(e) => { setQuery(e.target.value); setOpenList(true); }}
-        className="w-full px-2.5 py-2 text-[13px]" style={error ? errStyle : inputStyle} />
-      {openList && (
-        <div className="absolute left-0 right-0 top-full mt-1 rounded-md overflow-hidden z-20"
-          style={{ background: C.surface, border: `1px solid ${C.rule}`, boxShadow: "0 6px 18px rgba(22,32,43,.12)" }}>
-          {hits.length === 0 && <div className="px-2.5 py-2 text-[12px]" style={{ color: C.muted }}>No one matches.</div>}
-          {hits.map((m) => (
-            <button key={m.email} onClick={() => { onChange(m.name); setOpenList(false); }}
-              className="w-full text-left px-2.5 py-2 text-[13px]" style={{ background: m.name === value ? "#F4F7F9" : C.surface }}>
-              {m.name}
-              <span className="ml-2 text-[11px]" style={{ fontFamily: MONO, color: C.muted }}>{m.email}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <select value={known ? value : ""} disabled={disabled || options.length === 0}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full px-2.5 py-2 text-[13px]" style={error ? errStyle : inputStyle}>
+      <option value="" disabled>
+        {options.length === 0 ? "No one's on this project yet" : "Choose someone"}
+      </option>
+      {/* the current value may belong to someone since removed from the
+         project — keep it visible (disabled) rather than silently drop it */}
+      {!known && value && <option value={value} disabled>{value} (not on this project)</option>}
+      {options.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+    </select>
   );
 }
 
@@ -868,6 +850,7 @@ export default function RaidLogApp() {
 
   const shared = {
     ws, items: view_items, projects: myProjects, projectName, members,
+    projectMembers: data.projectMembers,
     me: me.name, myEmail: me.email, limits, plan: ws.plan,
     hasExpansion: ws.has_expansion_addon, workspaceName: ws.name,
     canEdit, canDelete, isWsAdmin,
@@ -981,7 +964,7 @@ export default function RaidLogApp() {
       </div>
 
       {open && (
-        <Detail item={open} members={members} projectName={projectName(open.projectId)}
+        <Detail item={open} members={members} projectMembers={data.projectMembers} projectName={projectName(open.projectId)}
           canEdit={canEdit(open)} canDelete={canDelete(open)} me={me.name}
           onClose={() => setOpen(null)} onSave={handleSave} onComment={handleComment}
           onRemind={handleRemind} onSnooze={handleSnooze} onDelete={() => setConfirm(open)}
@@ -1169,15 +1152,31 @@ function ExportButton({ limits, filename = "raid-log.csv", onExport, onBlocked }
 }
 
 /* ══ ITEM FORM — validates every required field ════════ */
-function ItemForm({ projects, members, me, onCancel, onSubmit }) {
+function ItemForm({ projects, members, projectMembers, me, onCancel, onSubmit }) {
   const [form, setForm] = useState({
     type: "risk", projectId: projects[0]?.id ?? "", priority: "medium", status: "open",
     title: "", description: "", impact: "", nextStep: "", comment: "", finalResolution: "",
-    owner: me, dueDate: shift(7),
+    owner: "", dueDate: shift(7),
   });
   const [errors, setErrors] = useState({});
   const [tried, setTried] = useState(false);
   const set = (k, v) => { setForm({ ...form, [k]: v }); if (tried) setErrors(validate({ ...form, [k]: v })); };
+
+  /* who's actually on the selected project — not the whole workspace */
+  const assignees = useMemo(() =>
+    (projectMembers ?? [])
+      .filter((pm) => pm.project_id === form.projectId)
+      .map((pm) => members.find((m) => m.id === pm.workspace_member_id))
+      .filter(Boolean),
+    [projectMembers, members, form.projectId]);
+
+  /* default to yourself if you're on the project; otherwise leave it
+     for a deliberate pick, and re-run this whenever project changes */
+  useEffect(() => {
+    if (assignees.some((a) => a.name === form.owner)) return;
+    const self = assignees.find((a) => a.name === me);
+    setForm((f) => ({ ...f, owner: self ? self.name : "" }));
+  }, [form.projectId, assignees]);
 
   const mentioned = findMentions(form.comment, members).filter((m) => m.name !== me);
   const ownerIsSomeoneElse = form.owner && form.owner !== me;
@@ -1220,7 +1219,7 @@ function ItemForm({ projects, members, me, onCancel, onSubmit }) {
           </select>
         </Field>
         <Field label="Owner" required error={errors.owner}>
-          <OwnerPicker value={form.owner} members={members} onChange={(v) => set("owner", v)} error={errors.owner} />
+          <AssigneeSelect value={form.owner} options={assignees} onChange={(v) => set("owner", v)} error={errors.owner} />
         </Field>
         <Field label="Due date" required error={errors.dueDate}>
           <input type="date" value={form.dueDate} onChange={(e) => set("dueDate", e.target.value)}
@@ -1232,6 +1231,12 @@ function ItemForm({ projects, members, me, onCancel, onSubmit }) {
           </select>
         </Field>
       </div>
+
+      {assignees.length === 0 && (
+        <div className="text-[11.5px] leading-relaxed mb-3" style={{ color: C.soon }}>
+          Nobody's on this project yet — add people to it from the Projects tab before you can assign this item.
+        </div>
+      )}
 
       <div className="grid sm:grid-cols-3 gap-3 mb-3">
         {[["description", "Description"], ["impact", "Impact"], ["nextStep", "Next step"]].map(([k, l]) => (
@@ -1429,11 +1434,18 @@ function ItemRow({ item, idx, projectName, onOpen, showOwner }) {
 }
 
 /* ══ DETAIL DRAWER — edits go into a draft, Save commits ══ */
-function Detail({ item, members, projectName, canEdit, canDelete, me, onClose, onSave, onComment, onRemind, onSnooze, onDelete, onCopied }) {
+function Detail({ item, members, projectMembers, projectName, canEdit, canDelete, me, onClose, onSave, onComment, onRemind, onSnooze, onDelete, onCopied }) {
   const [draft, setDraft] = useState(item);
   const [comment, setComment] = useState("");
   const [copied, setCopied] = useState(false);
   const panel = useRef(null);
+
+  const assignees = useMemo(() =>
+    (projectMembers ?? [])
+      .filter((pm) => pm.project_id === item.projectId)
+      .map((pm) => members.find((m) => m.id === pm.workspace_member_id))
+      .filter(Boolean),
+    [projectMembers, members, item.projectId]);
 
   /* re-sync when a different item is opened, or after a save */
   useEffect(() => { setDraft(item); }, [item.id, item.updatedAt]);
@@ -1556,7 +1568,7 @@ function Detail({ item, members, projectName, canEdit, canDelete, me, onClose, o
             </Field>
             <Field label="Owner">
               {canEdit
-                ? <OwnerPicker value={draft.owner} members={members} onChange={(v) => set("owner", v)} />
+                ? <AssigneeSelect value={draft.owner} options={assignees} onChange={(v) => set("owner", v)} />
                 : <input value={item.owner} readOnly className="w-full px-2.5 py-2 text-[13px]" style={ro} />}
             </Field>
             <Field label="Due date">
@@ -1763,7 +1775,7 @@ function Watchlist({ items, projectName, showOwner, onOpen, onRemind, onSnooze, 
 }
 
 /* ══ MY WORK ══════════════════════════════════════════ */
-function MyWorkView({ items, projects, projectName, members, me, limits, isWsAdmin, onOpen, onRemind, onSnooze, onCreate, onGoToAll, onUpgrade, onExport, onQuickStatus }) {
+function MyWorkView({ items, projects, projectName, members, projectMembers, me, limits, isWsAdmin, onOpen, onRemind, onSnooze, onCreate, onGoToAll, onUpgrade, onExport, onQuickStatus }) {
   const [composing, setComposing] = useState(false);
   const [query, setQuery] = useState("");
   const [showDone, setShowDone] = useState(false);
@@ -1838,7 +1850,7 @@ function MyWorkView({ items, projects, projectName, members, me, limits, isWsAdm
         )}
 
         {composing && (
-          <ItemForm projects={projects} members={members} me={me}
+          <ItemForm projects={projects} members={members} projectMembers={projectMembers} me={me}
             onCancel={() => setComposing(false)}
             onSubmit={(form) => { onCreate(form); setComposing(false); }} />
         )}
@@ -1862,7 +1874,7 @@ function MyWorkView({ items, projects, projectName, members, me, limits, isWsAdm
 }
 
 /* ══ LOG ══════════════════════════════════════════════ */
-function LogView({ items, projects, projectName, members, me, limits, isWsAdmin, onOpen, onRemind, onSnooze, onCreate, onUpgrade, onGoTo, onExport }) {
+function LogView({ items, projects, projectName, members, projectMembers, me, limits, isWsAdmin, onOpen, onRemind, onSnooze, onCreate, onUpgrade, onGoTo, onExport }) {
   const [query, setQuery] = useState("");
   const [mineOnly, setMineOnly] = useState(false);
   const [filters, setFilters] = useState({ projectId: "all", type: "all", priority: "all", status: "all", owner: "all" });
@@ -1954,7 +1966,7 @@ function LogView({ items, projects, projectName, members, me, limits, isWsAdmin,
         )}
 
         {composing && (
-          <ItemForm projects={projects} members={members} me={me}
+          <ItemForm projects={projects} members={members} projectMembers={projectMembers} me={me}
             onCancel={() => setComposing(false)} onSubmit={(form) => { onCreate(form); setComposing(false); }} />
         )}
 
