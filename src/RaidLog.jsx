@@ -65,6 +65,10 @@ const openStripe = (url) => window.open(url, "_blank", "noopener,noreferrer");
    path left, so it gets a real conversation rather than a dead button.  */
 const SALES_EMAIL = "hello@raidlog.app";
 
+/* stable production alias — do NOT use a per-build Vercel URL here,
+   it changes on every deploy and would break links already sent */
+const APP_URL = "https://raid-log-xi.vercel.app";
+
 function contactSales({ workspaceName, plan, hasExpansion, projects, seats, limits, hitting }) {
   const what = hitting === "projects" ? "a fourth project"
     : hitting === "seats" ? "more than 30 people"
@@ -140,6 +144,8 @@ Due Date:  ${item.dueDate}
 
 Please review and update the item in the RAID Log, or reach out if you need support closing it out.
 
+${APP_URL}
+
 — Sent from RAID Log`;
   window.open(`mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_self");
 }
@@ -160,6 +166,8 @@ Next step: ${item.nextStep || "not recorded yet"}
 
 Open the RAID Log to pick it up.
 
+${APP_URL}
+
 — Sent from RAID Log`;
   window.open(`mailto:${ownerEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_self");
 }
@@ -177,6 +185,8 @@ Project:   ${projectName}
 
 Open the RAID Log to reply.
 
+${APP_URL}
+
 — Sent from RAID Log`;
   window.open(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_self");
 }
@@ -189,7 +199,7 @@ You've been given access to our team's RAID Log, where we track risks, actions, 
 
 Open the link below and sign in with this email address — no password needed, you'll get a one-time sign-in link.
 
-[ paste your RAID Log URL here ]
+${APP_URL}
 
 — Sent from RAID Log`;
   window.open(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_self");
