@@ -329,6 +329,30 @@ drop trigger if exists trg_last_admin on workspace_members;
 create trigger trg_last_admin before update or delete on workspace_members
   for each row execute function guard_last_admin();
 
+-- Billing fields are only meant to move via the dashboard (postgres role,
+-- no JWT) or a webhook using the service role (auth.uid() is null in both
+-- cases). ws_update otherwise lets any workspace admin write any column,
+-- which would let someone grant themselves the paid plan for free.
+create or replace function guard_billing_fields()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and (
+       new.plan                   is distinct from old.plan
+    or new.has_expansion_addon    is distinct from old.has_expansion_addon
+    or new.stripe_customer_id     is distinct from old.stripe_customer_id
+    or new.stripe_subscription_id is distinct from old.stripe_subscription_id
+    or new.subscription_status    is distinct from old.subscription_status
+  ) then
+    raise exception 'BILLING_FIELDS_LOCKED: plan and subscription fields can only be changed from the dashboard or a service-role webhook'
+      using errcode = 'insufficient_privilege';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_guard_billing_fields on workspaces;
+create trigger trg_guard_billing_fields before update on workspaces
+  for each row execute function guard_billing_fields();
+
 -- ------------------------------------------------------------
 --  6. AUTO-STAMPS
 -- ------------------------------------------------------------
@@ -543,9 +567,24 @@ drop policy if exists notif_select on notifications;
 create policy notif_select on notifications for select
   using (recipient_id = my_member_id());
 
+-- actor must be the caller (or system, ie null); recipient and the referenced
+-- item, if any, must actually belong to the workspace on the row — otherwise
+-- any member could forge notifications impersonating someone else or aimed
+-- at a member of a workspace they don't belong to.
 drop policy if exists notif_insert on notifications;
 create policy notif_insert on notifications for insert
-  with check (is_workspace_member(workspace_id));
+  with check (
+    is_workspace_member(workspace_id)
+    and (actor_id is null or actor_id = my_member_id())
+    and exists (
+      select 1 from workspace_members wm
+      where wm.id = recipient_id and wm.workspace_id = workspace_id
+    )
+    and (raid_item_id is null or exists (
+      select 1 from raid_items i
+      where i.id = raid_item_id and i.workspace_id = workspace_id
+    ))
+  );
 
 drop policy if exists notif_update on notifications;
 create policy notif_update on notifications for update

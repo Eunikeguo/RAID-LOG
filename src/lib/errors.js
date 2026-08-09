@@ -10,6 +10,7 @@ export const CAP_CODES = [
   "CSV_EXPORT_REQUIRES_PAID",
   "ALREADY_IN_WORKSPACE",
   "OWNER_NOT_ON_PROJECT",
+  "BILLING_FIELDS_LOCKED",
 ];
 
 export function capCode(error) {
@@ -27,6 +28,7 @@ const FRIENDLY = {
   CSV_EXPORT_REQUIRES_PAID: "CSV export comes with the Paid plan.",
   ALREADY_IN_WORKSPACE: "You already belong to a workspace.",
   OWNER_NOT_ON_PROJECT: "That person isn't on this project, so they can't be the owner.",
+  BILLING_FIELDS_LOCKED: "Plan changes go through billing, not this screen.",
 };
 
 export function friendly(error, fallback = "Something went wrong. Try again.") {
